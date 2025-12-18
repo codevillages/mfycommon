@@ -34,7 +34,10 @@
 
 ## 何时使用该技能
 - 需要标准化的 HTTP 服务（路由+配置+日志+错误+校验）。
-- 需要自动化 OpenAPI/Swagger、路由约定、统一返回结构时。
+- 需要统一中间件链路（RequestID/访问日志/鉴权/限流）与默认响应封装。
+- 需要 gRPC 服务或客户端，并希望复用 GoFrame 的配置/日志/注册发现能力（`contrib/rpc/grpcx`）。
+- 需要插件化扩展（`ghttp.Plugin`）或以配置驱动开启/关闭服务能力。
+- 需要 OpenAPI/Swagger、pprof、AccessLog 等运维能力。
 - 需要统一接入 DB/Redis 配置、超时与可观测性时。
 
 ## 输出格式
@@ -47,107 +50,18 @@
   - Redis 未命中：结果为空或 nil 即视为未命中，不当作系统错误；业务层转换为 NotFound/空值。
 
 ## 示例（最小可运行 + 高频用例）
-1. **初始化（配置+日志+路由+优雅启动）**
-```go
-func main() {
-    ctx := gctx.GetInitCtx()
-    log := g.Log()
-    log.SetLevel("info")
-    log.SetStdout(true)
-
-    s := g.Server()
-    s.SetConfigWithMap(g.Map{
-        "address":        g.Cfg().MustGet(ctx, "server.address", ":8080").String(),
-        "readTimeout":    "5s",
-        "writeTimeout":   "10s",
-        "idleTimeout":    "60s",
-        "maxHeaderBytes": "1m",
-    })
-    s.Use(requestIDMiddleware, accessLogMiddleware, ghttp.MiddlewareHandlerResponse)
-    s.Group("/api", func(group *ghttp.RouterGroup) {
-        group.Bind(new(controller))
-    })
-    s.Run()
-}
-```
-
-2. **常规操作（结构体路由+校验）**
-```go
-type CreateReq struct {
-    g.Meta `path:"/users" method:"post" summary:"Create user"`
-    Name   string `json:"name" v:"required|min-length:1|max-length:50"`
-}
-type CreateRes struct {
-    ID int64 `json:"id"`
-}
-type controller struct{}
-
-func (c *controller) PostUsers(ctx context.Context, req *CreateReq) (*CreateRes, error) {
-    if req.Name == "" {
-        return nil, gerror.NewCode(gcode.CodeInvalidParameter, "name required")
-    }
-    return &CreateRes{ID: 1}, nil
-}
-```
-
-3. **错误/重试（下游调用）**
-```go
-func callWithRetry(ctx context.Context, fn func(context.Context) error) error {
-    var lastErr error
-    for i := 0; i < 3; i++ {
-        if err := fn(ctx); err == nil {
-            return nil
-        } else {
-            lastErr = err
-        }
-        time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
-    }
-    return gerror.WrapCode(gcode.CodeTimeout, lastErr, "downstream timeout")
-}
-```
-
-4. **并发/连接管理（后台任务 + 池配置示例）**
-```go
-func asyncTask(r *ghttp.Request) {
-    ctx := r.GetNeverDoneCtx()
-    go func() {
-        g.Log().Info(ctx, "async start")
-        // do work...
-    }()
-}
-```
-```yaml
-# config/config.yaml
-database:
-  default:
-    type: "mysql"
-    host: "127.0.0.1"
-    port: "3306"
-    user: "app"
-    pass: "${DB_PASS}"
-    name: "appdb"
-    maxIdle: 20
-    maxOpen: 80
-    queryTimeout: "1s"
-    execTimeout: "3s"
-redis:
-  default:
-    address: "127.0.0.1:6379"
-    db: 0
-    maxIdle: 10
-    maxActive: 100
-    dialTimeout: "1s"
-```
-
-5. **收尾清理（优雅关闭）**
-```go
-func waitShutdown(s *ghttp.Server) {
-    ch := make(chan os.Signal, 1)
-    signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-    <-ch
-    s.Shutdown()
-}
-```
+示例较多，已拆分到子目录，按需加载：
+- `mfycommon/goframe/examples/quickstart.md`：最小可运行（配置+日志+路由+优雅启动）。
+- `mfycommon/goframe/examples/config.md`：配置读取、环境覆盖、动态刷新建议。
+- `mfycommon/goframe/examples/routing.md`：路由分组、REST 绑定、OpenAPI/Swagger、静态/文件上传。
+- `mfycommon/goframe/examples/middleware.md`：RequestID、访问日志、CORS、鉴权、限流模板。
+- `mfycommon/goframe/examples/response.md`：统一响应、文件下载、流式/重定向。
+- `mfycommon/goframe/examples/errors.md`：gerror/gcode 约定、错误映射、重试策略。
+- `mfycommon/goframe/examples/db.md`：gdb 初始化、查询、事务、超时。
+- `mfycommon/goframe/examples/redis.md`：gredis 初始化、常规操作、超时/重试。
+- `mfycommon/goframe/examples/grpcx.md`：grpcx 服务端/客户端、配置、拦截器。
+- `mfycommon/goframe/examples/plugin.md`：ghttp.Plugin 示例与生命周期。
+- `mfycommon/goframe/examples/observability.md`：AccessLog、pprof、Tracing、指标埋点建议。
 
 ## 限制条件与安全规则
 - 禁止生产使用 `server.address=":0"`；禁止未配置超时的下游调用。
